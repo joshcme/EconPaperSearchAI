@@ -8,6 +8,9 @@ from networkx import bipartite
 from networkx.algorithms import community as nx_community
 import streamlit as st
 from datetime import datetime
+import matplotlib.pyplot as plt
+import matplotlib
+matplotlib.use('Agg')  # Use non-interactive backend for Streamlit
 
 # Page configuration
 st.set_page_config(page_title="AI-Powered Research Explorer", layout="wide")
@@ -37,6 +40,8 @@ if "ai_response" not in st.session_state:
     st.session_state.ai_response = None
 if "analysis_complete" not in st.session_state:
     st.session_state.analysis_complete = False
+if "graph_figures" not in st.session_state:
+    st.session_state.graph_figures = None
 
 # Title
 st.title('AI-Powered Research Explorer')
@@ -75,6 +80,16 @@ with st.sidebar:
         submit_disabled = True
     else:
         submit_disabled = False
+    
+    # Graph visualization options
+    st.subheader("Graph Visualization Settings")
+    show_labels = st.checkbox("Show node labels", value=True, key="show_labels")
+    graph_layout = st.selectbox(
+        "Graph Layout",
+        ["spring", "circular", "kamada_kawai", "random"],
+        index=0,
+        key="graph_layout"
+    )
     
     submit = st.button('Run analysis', disabled=submit_disabled, type="primary", key="submit_button")
 
@@ -331,6 +346,252 @@ def ask_deepseek(system_prompt, user_prompt, temperature=0.3, return_json=False)
         st.error(f"Error calling DeepSeek API: {str(e)}")
         return None
 
+def create_network_visualization(graph, title="Network Graph", layout="spring", show_labels=True, highlight_nodes=None, highlight_edges=None):
+    """Create a matplotlib visualization of the network graph."""
+    if not graph or len(graph.nodes()) == 0:
+        return None
+    
+    # Set up the figure
+    fig, ax = plt.subplots(figsize=(12, 8))
+    
+    # Choose layout
+    if layout == "spring":
+        pos = nx.spring_layout(graph, k=1, iterations=50, seed=42)
+    elif layout == "circular":
+        pos = nx.circular_layout(graph)
+    elif layout == "kamada_kawai":
+        pos = nx.kamada_kawai_layout(graph)
+    else:
+        pos = nx.random_layout(graph, seed=42)
+    
+    # Define node colors by type
+    node_colors = []
+    node_sizes = []
+    for node in graph.nodes():
+        node_type = graph.nodes[node].get('node_type', 'unknown')
+        if node_type == 'paper':
+            node_colors.append('#FF6B6B')  # Red
+            node_sizes.append(300)
+        elif node_type == 'concept':
+            node_colors.append('#4ECDC4')  # Teal
+            node_sizes.append(200)
+        elif node_type == 'author':
+            node_colors.append('#45B7D1')  # Blue
+            node_sizes.append(150)
+        else:
+            node_colors.append('#95A5A6')  # Gray
+            node_sizes.append(100)
+    
+    # Highlight specific nodes if provided
+    if highlight_nodes:
+        for i, node in enumerate(graph.nodes()):
+            if node in highlight_nodes:
+                node_colors[i] = '#FFD700'  # Gold
+                node_sizes[i] = 500
+    
+    # Draw the graph
+    nx.draw_networkx_nodes(graph, pos, ax=ax, node_color=node_colors, node_size=node_sizes, alpha=0.8)
+    
+    # Draw edges
+    edge_colors = []
+    edge_widths = []
+    for edge in graph.edges():
+        if highlight_edges and edge in highlight_edges:
+            edge_colors.append('#FFD700')  # Gold for highlighted edges
+            edge_widths.append(3.0)
+        else:
+            edge_colors.append('#95A5A6')  # Gray
+            edge_widths.append(0.5)
+    
+    nx.draw_networkx_edges(graph, pos, ax=ax, edge_color=edge_colors, width=edge_widths, alpha=0.5)
+    
+    # Add labels if requested
+    if show_labels:
+        labels = {}
+        for node in graph.nodes():
+            label = graph.nodes[node].get('label', str(node))
+            # Truncate long labels
+            if len(label) > 30:
+                label = label[:27] + "..."
+            labels[node] = label
+        
+        nx.draw_networkx_labels(graph, pos, ax=ax, labels=labels, font_size=8, font_weight='bold')
+    
+    # Set title and remove axes
+    ax.set_title(title, fontsize=14, fontweight='bold', pad=20)
+    ax.axis('off')
+    
+    # Add legend
+    from matplotlib.patches import Patch
+    legend_elements = [
+        Patch(facecolor='#FF6B6B', label='Papers'),
+        Patch(facecolor='#4ECDC4', label='Concepts'),
+        Patch(facecolor='#45B7D1', label='Authors'),
+    ]
+    if highlight_nodes:
+        legend_elements.append(Patch(facecolor='#FFD700', label='Highlighted Nodes'))
+    
+    ax.legend(handles=legend_elements, loc='upper right', fontsize=10)
+    
+    plt.tight_layout()
+    return fig
+
+def create_community_visualization(graph, layout="spring", show_labels=True):
+    """Create a visualization with communities colored differently."""
+    if not graph or len(graph.nodes()) == 0:
+        return None
+    
+    # Detect communities if not already detected
+    if not any('community' in data for _, data in graph.nodes(data=True)):
+        try:
+            communities = nx_community.louvain_communities(graph, weight="weight", seed=42)
+            for community_id, community in enumerate(communities, start=1):
+                for node in community:
+                    graph.nodes[node]["community"] = community_id
+        except:
+            # If community detection fails, assign all nodes to same community
+            for node in graph.nodes():
+                graph.nodes[node]["community"] = 1
+    
+    # Set up the figure
+    fig, ax = plt.subplots(figsize=(14, 10))
+    
+    # Choose layout
+    if layout == "spring":
+        pos = nx.spring_layout(graph, k=1, iterations=50, seed=42)
+    elif layout == "circular":
+        pos = nx.circular_layout(graph)
+    elif layout == "kamada_kawai":
+        pos = nx.kamada_kawai_layout(graph)
+    else:
+        pos = nx.random_layout(graph, seed=42)
+    
+    # Get unique communities
+    communities = set()
+    for node in graph.nodes():
+        communities.add(graph.nodes[node].get('community', 1))
+    
+    # Assign colors to communities
+    import colorsys
+    community_colors = {}
+    for i, community in enumerate(sorted(communities)):
+        hue = i / len(communities)
+        rgb = colorsys.hsv_to_rgb(hue, 0.7, 0.9)
+        community_colors[community] = rgb
+    
+    # Draw nodes by community
+    for community in sorted(communities):
+        community_nodes = [node for node in graph.nodes() if graph.nodes[node].get('community', 0) == community]
+        node_color = community_colors[community]
+        nx.draw_networkx_nodes(
+            graph, pos, 
+            ax=ax,
+            nodelist=community_nodes,
+            node_color=[node_color] * len(community_nodes),
+            node_size=200,
+            alpha=0.8
+        )
+    
+    # Draw edges
+    nx.draw_networkx_edges(graph, pos, ax=ax, edge_color='#95A5A6', width=0.5, alpha=0.3)
+    
+    # Add labels if requested
+    if show_labels:
+        labels = {}
+        for node in graph.nodes():
+            label = graph.nodes[node].get('label', str(node))
+            if len(label) > 20:
+                label = label[:17] + "..."
+            labels[node] = label
+        
+        nx.draw_networkx_labels(graph, pos, ax=ax, labels=labels, font_size=7, font_weight='bold')
+    
+    # Set title and remove axes
+    ax.set_title(f"Community Structure - {len(communities)} Communities Found", fontsize=14, fontweight='bold', pad=20)
+    ax.axis('off')
+    
+    plt.tight_layout()
+    return fig
+
+def create_path_visualization(graph, path, layout="spring", show_labels=True):
+    """Create a visualization highlighting a specific path."""
+    if not graph or len(graph.nodes()) == 0 or not path:
+        return None
+    
+    # Set up the figure
+    fig, ax = plt.subplots(figsize=(14, 10))
+    
+    # Choose layout
+    if layout == "spring":
+        pos = nx.spring_layout(graph, k=1, iterations=50, seed=42)
+    elif layout == "circular":
+        pos = nx.circular_layout(graph)
+    elif layout == "kamada_kawai":
+        pos = nx.kamada_kawai_layout(graph)
+    else:
+        pos = nx.random_layout(graph, seed=42)
+    
+    # Draw all nodes
+    nx.draw_networkx_nodes(graph, pos, ax=ax, node_color='#95A5A6', node_size=100, alpha=0.3)
+    
+    # Highlight path nodes
+    path_nodes = [node['id'] for node in path]
+    nx.draw_networkx_nodes(
+        graph, pos, 
+        ax=ax,
+        nodelist=path_nodes,
+        node_color='#FFD700',
+        node_size=300,
+        alpha=0.9
+    )
+    
+    # Draw all edges
+    nx.draw_networkx_edges(graph, pos, ax=ax, edge_color='#95A5A6', width=0.5, alpha=0.3)
+    
+    # Highlight path edges
+    path_edges = []
+    for i in range(len(path_nodes) - 1):
+        if graph.has_edge(path_nodes[i], path_nodes[i+1]):
+            path_edges.append((path_nodes[i], path_nodes[i+1]))
+    
+    if path_edges:
+        nx.draw_networkx_edges(
+            graph, pos, 
+            ax=ax,
+            edgelist=path_edges,
+            edge_color='#FFD700',
+            width=3.0,
+            alpha=0.9
+        )
+    
+    # Add labels if requested
+    if show_labels:
+        labels = {}
+        for node in path_nodes:
+            node_label = graph.nodes[node].get('label', str(node))
+            if len(node_label) > 25:
+                node_label = node_label[:22] + "..."
+            labels[node] = node_label
+        
+        nx.draw_networkx_labels(graph, pos, ax=ax, labels=labels, font_size=8, font_weight='bold')
+    
+    # Set title and remove axes
+    ax.set_title(f"Shortest Path - {len(path)} steps", fontsize=14, fontweight='bold', pad=20)
+    ax.axis('off')
+    
+    # Add step labels
+    for i, step in enumerate(path):
+        node = step['id']
+        x, y = pos[node]
+        step_label = f"Step {i+1}"
+        ax.annotate(step_label, (x, y-0.08), xytext=(0, -10), 
+                   textcoords='offset points', ha='center', va='top',
+                   fontsize=8, fontweight='bold', color='#2C3E50',
+                   bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.7))
+    
+    plt.tight_layout()
+    return fig
+
 # -------------------------------------------------------------------
 # Main Processing Logic
 # -------------------------------------------------------------------
@@ -442,6 +703,7 @@ if submit:
                 
                 # 6. Pre-compute analysis based on choice
                 choice = user_choice.get('choice')
+                graph_figures = {}
                 
                 if choice == 'idea_evaluation_centrality':
                     with st.spinner("Computing centralities..."):
@@ -454,6 +716,34 @@ if submit:
                             'concepts': central_concepts,
                             'authors': central_authors
                         }
+                        
+                        # Create network visualizations
+                        top_paper_nodes = [p['id'] for p in central_papers[:5]]
+                        top_concept_nodes = [c['id'] for c in central_concepts[:5]]
+                        top_author_nodes = [a['id'] for a in central_authors[:5]]
+                        highlighted_nodes = top_paper_nodes + top_concept_nodes + top_author_nodes
+                        
+                        # Full graph visualization
+                        fig_full = create_network_visualization(
+                            G, 
+                            title="Full Knowledge Graph",
+                            layout=graph_layout,
+                            show_labels=show_labels,
+                            highlight_nodes=highlighted_nodes
+                        )
+                        graph_figures['full_graph'] = fig_full
+                        
+                        # Paper graph visualization
+                        fig_paper = create_network_visualization(
+                            paper_graph,
+                            title="Paper Network (Weighted)",
+                            layout=graph_layout,
+                            show_labels=show_labels,
+                            highlight_nodes=top_paper_nodes
+                        )
+                        graph_figures['paper_graph'] = fig_paper
+                        
+                        st.session_state.graph_figures = graph_figures
                         
                         # Generate AI interpretation
                         system_prompt = """
@@ -493,8 +783,25 @@ if submit:
                     if not concept_list:
                         st.warning("No concepts found in the retrieved papers.")
                     else:
-                        # We'll handle this interactively in the results section
-                        st.session_state.concept_list = concept_list
+                        # Create full graph visualization
+                        fig_full = create_network_visualization(
+                            G,
+                            title="Full Knowledge Graph",
+                            layout=graph_layout,
+                            show_labels=show_labels
+                        )
+                        graph_figures['full_graph'] = fig_full
+                        
+                        # Create concept graph visualization
+                        fig_concept = create_network_visualization(
+                            concept_graph,
+                            title="Concept Network",
+                            layout=graph_layout,
+                            show_labels=show_labels
+                        )
+                        graph_figures['concept_graph'] = fig_concept
+                        
+                        st.session_state.graph_figures = graph_figures
                 
                 elif choice == 'paper_community_detection':
                     with st.spinner("Detecting communities..."):
@@ -505,6 +812,46 @@ if submit:
                             'papers': paper_communities,
                             'concepts': concept_communities
                         }
+                        
+                        # Create community visualizations
+                        # First, add community info to graphs for visualization
+                        for community_data in paper_communities:
+                            node = community_data['id']
+                            community = community_data['community']
+                            if paper_graph.has_node(node):
+                                paper_graph.nodes[node]['community'] = community
+                        
+                        for community_data in concept_communities:
+                            node = community_data['id']
+                            community = community_data['community']
+                            if concept_graph.has_node(node):
+                                concept_graph.nodes[node]['community'] = community
+                        
+                        # Create community visualizations
+                        fig_paper_community = create_community_visualization(
+                            paper_graph,
+                            layout=graph_layout,
+                            show_labels=show_labels
+                        )
+                        graph_figures['paper_community'] = fig_paper_community
+                        
+                        fig_concept_community = create_community_visualization(
+                            concept_graph,
+                            layout=graph_layout,
+                            show_labels=show_labels
+                        )
+                        graph_figures['concept_community'] = fig_concept_community
+                        
+                        # Full graph visualization
+                        fig_full = create_network_visualization(
+                            G,
+                            title="Full Knowledge Graph",
+                            layout=graph_layout,
+                            show_labels=show_labels
+                        )
+                        graph_figures['full_graph'] = fig_full
+                        
+                        st.session_state.graph_figures = graph_figures
                         
                         # Generate AI interpretation
                         system_prompt = """
@@ -554,6 +901,7 @@ if st.session_state.step == "results" and st.session_state.analysis_complete:
     projections = st.session_state.projections
     user_choice = st.session_state.user_choice
     concept_list = st.session_state.concept_list
+    graph_figures = st.session_state.graph_figures or {}
     
     st.divider()
     st.header("📊 Analysis Results")
@@ -601,6 +949,17 @@ if st.session_state.step == "results" and st.session_state.analysis_complete:
             else:
                 st.write("No authors found.")
         
+        # Display graph visualizations
+        st.subheader("📊 Network Visualizations")
+        
+        if graph_figures.get('full_graph'):
+            st.write("**Full Knowledge Graph**")
+            st.pyplot(graph_figures['full_graph'])
+        
+        if graph_figures.get('paper_graph'):
+            st.write("**Paper Network (Weighted Projection)**")
+            st.pyplot(graph_figures['paper_graph'])
+        
         # AI Interpretation
         if st.session_state.ai_response:
             st.subheader("🧠 AI Interpretation")
@@ -608,6 +967,17 @@ if st.session_state.step == "results" and st.session_state.analysis_complete:
     
     elif choice == 'concept_shortest_path':
         st.subheader("🔗 Shortest Path Analysis")
+        
+        # Display graph visualizations
+        st.subheader("📊 Network Visualizations")
+        
+        if graph_figures.get('full_graph'):
+            st.write("**Full Knowledge Graph**")
+            st.pyplot(graph_figures['full_graph'])
+        
+        if graph_figures.get('concept_graph'):
+            st.write("**Concept Network**")
+            st.pyplot(graph_figures['concept_graph'])
         
         if not concept_list:
             st.warning("No concepts found in the retrieved papers.")
@@ -650,6 +1020,18 @@ if st.session_state.step == "results" and st.session_state.analysis_complete:
                                         st.write(f"Abstract: {step['abstract'][:200]}...")
                                 st.divider()
                         
+                        # Create path visualization
+                        if concept_graph and path_data:
+                            path_fig = create_path_visualization(
+                                concept_graph,
+                                path_data,
+                                layout=graph_layout,
+                                show_labels=show_labels
+                            )
+                            if path_fig:
+                                st.subheader("🗺️ Path Visualization")
+                                st.pyplot(path_fig)
+                        
                         # Generate AI interpretation for the path
                         if st.button("Generate AI Interpretation for Path", key="generate_path_ai"):
                             with st.spinner("Generating AI analysis..."):
@@ -690,6 +1072,24 @@ if st.session_state.step == "results" and st.session_state.analysis_complete:
         
         paper_communities = st.session_state.communities.get('papers', [])
         concept_communities = st.session_state.communities.get('concepts', [])
+        
+        # Display graph visualizations
+        st.subheader("📊 Network Visualizations")
+        
+        if graph_figures.get('full_graph'):
+            st.write("**Full Knowledge Graph**")
+            st.pyplot(graph_figures['full_graph'])
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            if graph_figures.get('paper_community'):
+                st.write("**Paper Communities**")
+                st.pyplot(graph_figures['paper_community'])
+        
+        with col2:
+            if graph_figures.get('concept_community'):
+                st.write("**Concept Communities**")
+                st.pyplot(graph_figures['concept_community'])
         
         # Display communities summary
         if paper_communities:
@@ -738,7 +1138,7 @@ if st.session_state.step == "results" and st.session_state.analysis_complete:
     if st.button("🔄 Start New Analysis", type="secondary"):
         for key in ['step', 'results', 'G', 'projections', 'user_choice', 'openalex_data', 
                    'concept_list', 'centralities', 'communities', 'path_data', 'ai_response', 
-                   'analysis_complete']:
+                   'analysis_complete', 'graph_figures']:
             if key in st.session_state:
                 del st.session_state[key]
         st.rerun()
