@@ -4,3 +4,4 @@ networkx
 openai
 streamlit
 matplotlib
+scipy
