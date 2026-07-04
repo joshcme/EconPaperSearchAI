@@ -14,7 +14,7 @@ matplotlib.use('Agg')  # Use non-interactive backend for Streamlit
 
 # Page configuration
 st.set_page_config(page_title="AI-Powered Research Explorer", layout="wide")
-
+st.set_page_config(background_color = "white")
 # Initialize all session state variables
 if "step" not in st.session_state:
     st.session_state.step = "input"
